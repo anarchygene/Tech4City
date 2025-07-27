@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Update COM port accordingly
-ser = serial.Serial('COM4', 115200)
+ser = serial.Serial('COM4', 921600)
 
 # Set up plot
 plt.ion()

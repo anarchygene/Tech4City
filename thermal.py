@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import time
 
 # Configure serial port (change 'COMX' to your actual COM port)
-ser = serial.Serial('COM4', 115200)
+ser = serial.Serial('COM4', 921600)
 time.sleep(2)  # Wait for serial connection
 
 plt.ion()
