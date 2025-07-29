@@ -91,27 +91,32 @@ void playAudio(AudioMode& audioMode) {
 
   // Skip WAV header (44 bytes)
   file.seek(44);
-
-  Serial.println("🔊 Playing...");
+  Serial.println("🔊 Playing in loop...");
 
   uint8_t buffer[BLOCK_SIZE];
-  while (file.available() && audioMode == PLAYING) {
-    int bytesRead = file.read(buffer, BLOCK_SIZE);
-    if (bytesRead > 0) {
-      size_t bytesWritten;
-      
-      // Amplify each sample
-      for (int i = 0; i < bytesRead / 2; i++) {
-        int16_t sample = ((int16_t*)buffer)[i];
-        int32_t amplified = sample * 2;  // Gain = 2x
-        ((int16_t*)buffer)[i] = constrain(amplified, -32768, 32767);
+  while (audioMode == PLAYING) {
+    // If there's data left, read and play it
+    if (file.available()) {
+      int bytesRead = file.read(buffer, BLOCK_SIZE);
+      if (bytesRead > 0) {
+        // Amplify each sample
+        for (int i = 0; i < bytesRead / 2; i++) {
+          int16_t sample = ((int16_t*)buffer)[i];
+          int32_t amplified = sample * 2;  // Gain = 2x
+          ((int16_t*)buffer)[i] = constrain(amplified, -32768, 32767);
+        }
+        size_t bytesWritten;
+        i2s_write(I2S_NUM_1, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
       }
-
-      i2s_write(I2S_NUM_1, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
+    }
+    else {
+      // Hit end-of-file, loop back to the beginning of data
+      file.seek(44);
     }
   }
 
+  // Cleanup when someone set audioMode != PLAYING
   file.close();
-  Serial.println("✅ Playback finished");
+  Serial.println("✅ Playback stopped");
   audioMode = IDLE;
 }

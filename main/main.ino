@@ -29,14 +29,14 @@
 
 // External Reset Button
 #define RESET_BUTTON_PIN 15
-int buttonState = 0;
+int resetButtonState = 0;
 
 // ========================
 // Constants & Settings
 // ========================
 #define SERIAL_BAUD 921600
 #define MAX_RECORD_SECS 10
-#define RECORD_FILE "/recorded.wav"
+#define RECORD_FILE "/alarm.wav"
 
 #define TONE_FREQ 440.0f  // A4 note
 #define TONE_AMPLITUDE 3000
@@ -59,33 +59,32 @@ bool previousFall = false;  // Track state changes
 float prevAspectRatio = 0.0;
 unsigned long prevTime = 0;
 const float FALL_SPEED_THRESHOLD = 4;    // Change per second; tune based on testing
-const unsigned long FRAME_INTERVAL = 100;  // ms between reads (adjust to sensor rate)
+const unsigned long THERMAL_FRAME_INTERVAL = 100;  // ms between reads (adjust to sensor rate)
 
 // Audio Modes
 AudioMode audioMode = IDLE;
 
-// Global variables
+// Intervals variables
 // ========================
 unsigned long thermalTimer = 0;
-const long thermalInterval = 100;  // ~10 Hz
 
 unsigned long toneTimer = 0;
 const long toneInterval = 1000;  // Play tone every 1 second
-// Silent timer + escalation
-unsigned long silentWaitTime = 5000;      // 2 min
-unsigned long alarmEscalateTime = 15000;   // 5 min
-// unsigned long silentWaitTime = 120000;      // 2 min
-// unsigned long alarmEscalateTime = 300000;   // 5 min
+// ========================
+
+// Silent timer
+unsigned long silentWaitTime = 1250;      // 30 sec
 
 // Fall detection states
-bool waitingForReset = false;
 bool fall = false;
 bool lying = false;
 unsigned long fallStartTime = 0;
-unsigned long alarmStartTime = 0;
 
-bool guyFell = false;
-bool speakerOn = false;
+unsigned long lyingDetectionCount = 0;
+unsigned long standingDetectionCount = 0;
+
+bool triggerAlarm = false;
+bool alarmActive = false;
 
 // AudioAnalyzer
 int16_t audioBuffer[ANALYSIS_BUFFER];
@@ -142,84 +141,82 @@ void detectThermalSensor() {
     if (currentFall && !previousFall) {
       Serial.println("⚠️ FALL DETECTED! Aspect Ratio: " + String(aspectRatio) + ", Speed of change: " + String(ratioChangeSpeed));
       fall = true;
-      // Add alert code here, e.g., buzzer or LED
     } 
     
+    // Check if person currently standing
     if (isLying) {
       Serial.println("👤 Person lying. Aspect Ratio: " + String(aspectRatio));
-      lying = true;
+
+      // Count lying frames detected
+      lyingDetectionCount++;
+      standingDetectionCount = 0;
+
     } else {
       Serial.println("✅ Person standing. Aspect Ratio: " + String(aspectRatio));
+      
+      // Count standing frames detected
+      standingDetectionCount++;
+      lyingDetectionCount = 0;
+    } 
+
+    // Check if person has been lying for 10 frames
+    if (lyingDetectionCount >= 10) {
+      lying = true;
+    }
+
+    // Check if person has been standing for 10 frames
+    if (standingDetectionCount >= 10) {
       lying = false;
       fall = false;
-    } 
+      triggerAlarm = false;
+    }
 
     // Update previous values
     previousFall = currentFall;
     prevAspectRatio = aspectRatio;
     prevTime = currentTime;
   } else {
-    Serial.println("❌ No human detected.");
+    Serial.println("🐶 No human detected.");
     previousFall = false;
     lying = false;
     fall = false;
+    triggerAlarm = false;
   }
 
   if (fall && lying) {
-    Serial.println("🎨 Fell and lying down haha.");
-    // waitingForReset = true;
-    // guyFell = true;
-    // fallStartTime = millis();
-  } else {
-    Serial.println("Something else");
+    Serial.println("🚩 Guy fell and lying down haha.");
+    triggerAlarm = true;
+    fallStartTime = millis();
   }
 
-  delay(FRAME_INTERVAL);
+  // delay(THERMAL_FRAME_INTERVAL);
 }
 
 // ========================
 // Alarm Tone
 // ========================
-void playAlarmTone() {
-  i2s_start(I2S_NUM_1);
-  Serial.println("Guy dying");
+void playAlarm() {
+  if (alarmActive) return;
+  Serial.println("Playing Alarm");
 
-  // Generate alarm tone
-    static uint32_t phase = 0;
-    const uint32_t phase_delta = (880 * 2 * PI) / 8000 * 1000;
-    const int16_t max_amplitude = 0.8 * 32767;
+  // i2s_start(I2S_NUM_1);
 
-  // Buffer for audio samples
-    int16_t samples[32];
-    
-    for (int i = 0; i < 32; i++) {
-        // Generate square wave for sharp alarm sound
-        samples[i] = (phase < PI) ? max_amplitude : -max_amplitude;
-        phase += phase_delta;
-        if (phase >= 2 * PI * 1000) phase -= 2 * PI * 1000;
-    }
-    
-    // Write samples to I2S
-    size_t bytes_written;
-    i2s_write(I2S_NUM_1, samples, sizeof(samples), &bytes_written, portMAX_DELAY);
+  audioMode = PLAYING;
+  playAudio(audioMode);
 
-
-  // int16_t buffer[256];
-  // for (int i = 0; i < 256; i++) {
-  //   float t = (float)(i % SAMPLE_RATE) / SAMPLE_RATE;
-  //   buffer[i] = TONE_AMPLITUDE * sinf(2.0f * PI * TONE_FREQ * t);
-  // }
-  // size_t bytes_written;
-  // i2s_write(I2S_NUM_1, buffer, sizeof(buffer), &bytes_written, portMAX_DELAY);
-
-  speakerOn = true;
+  alarmActive = true;
 }
 
 void stopAlarm() {
+  if (!alarmActive) return;
   Serial.println("Stopping I2S");
-  i2s_stop(I2S_NUM_1);     // Stops the I2S driver
-  i2s_zero_dma_buffer(I2S_NUM_1);  // Clear any remaining data in DMA buffer
-  speakerOn = false;
+
+  audioMode = IDLE;
+
+  // i2s_stop(I2S_NUM_1);     // Stops the I2S driver
+  // i2s_zero_dma_buffer(I2S_NUM_1);  // Clear any remaining data in DMA buffer
+
+  alarmActive = false;
 }
 
 // ========================
@@ -273,15 +270,13 @@ void handleCommands() {
         }
         else if (cmd.equalsIgnoreCase("fell")) {
           Serial.println("The guy fell");
-          waitingForReset = true;
-          guyFell = true;
-          fallStartTime = millis();
+          fall = true;
+          lying = true;
         }
         else if (cmd.equalsIgnoreCase("got up")) {
-          waitingForReset = false;
-          guyFell = false;
-          stopAlarm();
-          Serial.println("✅ Alarm stopped cause the guy got up.");
+          fall = false;
+          lying = false;
+          Serial.println("The guy got up.");
         }
         else {
           Serial.println("Available commands: record, play, stop, info, format");
@@ -291,55 +286,6 @@ void handleCommands() {
       inputBuffer += c;
       if (inputBuffer.length() > 64) inputBuffer = ""; // Prevent overflow
     }
-  }
-}
-
-// ========================
-// Tone Generation
-// ========================
-void generateAndPlayTone() {
-  Serial.println("Playing tone");
-  int16_t buffer[256];
-  for (int i = 0; i < 256; i++) {
-    float t = (float)(i % SAMPLE_RATE) / SAMPLE_RATE;
-    buffer[i] = TONE_AMPLITUDE * sinf(2.0f * PI * TONE_FREQ * t);
-  }
-  size_t bytes_written;
-  i2s_write(I2S_NUM_1, buffer, sizeof(buffer), &bytes_written, portMAX_DELAY);
-}
-void playBeep() {
-  const int sampleRate = 16000;
-  const int frequency = 800;  // Higher pitch beep
-  const int durationMs = 200; // 200ms beep
-  const int samples = (sampleRate * durationMs) / 1000;
-  int16_t buffer[256];
-  
-  for (int i = 0; i < samples; i += 256) {
-    int chunkSize = (samples - i) > 256 ? 256 : (samples - i);
-    for (int j = 0; j < chunkSize; j++) {
-      float t = (float)(i + j) / sampleRate;
-      buffer[j] = 1000 * sinf(2.0f * PI * frequency * t);
-    }
-    size_t bytes_written;
-    i2s_write(I2S_NUM_1, buffer, chunkSize * sizeof(int16_t), &bytes_written, portMAX_DELAY);
-  }
-  
-  // Play silence for 300ms
-  memset(buffer, 0, sizeof(buffer));
-  for (int i = 0; i < (sampleRate * 300) / 1000; i += 256) {
-    int chunkSize = ((sampleRate * 300) / 1000 - i) > 256 ? 256 : ((sampleRate * 300) / 1000 - i);
-    size_t bytes_written;
-    i2s_write(I2S_NUM_1, buffer, chunkSize * sizeof(int16_t), &bytes_written, portMAX_DELAY);
-  }
-}
-void playTone() {
-  int16_t buffer[256];
-  for (int i = 0; i < 256; i++) {
-    buffer[i] = 3000 * sinf(2.0f * PI * 880.0 * i / 16000);
-  }
-  for (int n = 0; n < 50; n++) {
-    size_t bytesWritten;
-    i2s_write(I2S_NUM_1, buffer, sizeof(buffer), &bytesWritten, portMAX_DELAY);
   }
 }
 
@@ -414,6 +360,7 @@ void setup() {
 
   Serial.println("System Initialized");
 }
+
 // ========================
 // Main Loop
 // ========================
@@ -421,43 +368,37 @@ void loop() {
   unsigned long currentMillis = millis();
   
   // === THERMAL SENSOR ===
-  if (currentMillis - thermalTimer >= thermalInterval) {
+  if (currentMillis - thermalTimer >= THERMAL_FRAME_INTERVAL) {
+    detectThermalSensor();
     thermalTimer = currentMillis;
-    // detectThermalSensor();
   }
 
-  buttonState = digitalRead(RESET_BUTTON_PIN);
-  // Serial.print("buttonState: ");
-  // Serial.println(buttonState);
+  resetButtonState = digitalRead(RESET_BUTTON_PIN);
+
   // === Emergency silent timer ===
-  if (guyFell) {
-    if (buttonState == HIGH) {
-      guyFell = false;
-      if (speakerOn) stopAlarm();
+  if (triggerAlarm) {
+    if (resetButtonState == HIGH) {
+      triggerAlarm = false;
       Serial.println("✅ Reset button pressed - emergency cancelled.");
     } else if (currentMillis - fallStartTime > silentWaitTime) {
-      if (!speakerOn) {
-        alarmStartTime = millis();
+      if (!alarmActive) {
         Serial.println("⏰ Silent timer expired → triggering alarm!");
-        playAlarmTone();
+        playAlarm();
       }
     } 
-    
-    
-    if (currentMillis - alarmStartTime > alarmEscalateTime) {
-      Serial.println("🔁 Alarm escalation: sending repeated alert...");
-      // sendHuaweiAlert("⚠️ Elderly still unresponsive, immediate help required!");
-      alarmStartTime = millis(); // restart escalation timer
-    }
+
+  } else {
+    stopAlarm();
   }
 
-  // === SPEAKER OUTPUT ===
-  if (millis() - toneTimer >= toneInterval) {
-    toneTimer = millis();
-    // generateAndPlayTone();
-    // playBeep();
-    // playTone();
-  }
+  // // === SPEAKER OUTPUT ===
+  // if (millis() - toneTimer >= toneInterval) {
+  //   toneTimer = millis();
+  //   // generateAndPlayTone();
+  //   // playBeep();
+  //   // playTone();
+  // }
+
   handleCommands();
   // Process audio continuously
   processAudio(audioBuffer, bufferIndex, isRecording, recordStartTime);
