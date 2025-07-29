@@ -289,12 +289,13 @@ void handleCommands() {
         }
         else if (cmd.equalsIgnoreCase("fell")) {
           Serial.println("The guy fell");
-          fall = true;
-          lying = true;
+          triggerAlarm = true;
+          fallStartTime = millis();
         }
         else if (cmd.equalsIgnoreCase("got up")) {
           fall = false;
           lying = false;
+          triggerAlarm = false;
           Serial.println("The guy got up.");
         }
         else {
@@ -409,13 +410,21 @@ void loop() {
       resetFallState();
       Serial.println("✅ Reset button pressed - emergency cancelled.");
     } else if (currentMillis - fallStartTime > silentWaitTime) {
-      Serial.println("⏰ Silent timer expired → triggering alarm!");
-      playAlarm();
+      if (!alarmActive) {
+        Serial.println("⏰ Silent timer expired → triggering alarm!");
+        playAlarm();
+      }
     } 
 
   } else {
     stopAlarm();
   }
+  Serial.print("currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("fallStartTime: ");
+  Serial.println(fallStartTime);
+  Serial.print("silentWaitTime: ");
+  Serial.println(silentWaitTime);
 
   // // === SPEAKER OUTPUT ===
   // if (millis() - toneTimer >= toneInterval) {
