@@ -22,6 +22,7 @@ void setupSPIFFS();
 void writeWAVHeader(File &file, int32_t dataSize);
 void recordAudio(AudioMode& audioMode);
 void playAudio(AudioMode& audioMode);
+void playAudioTask(void *parameter);
 void stopAlarm();
 
 // External variables

@@ -82,6 +82,9 @@ void recordAudio(AudioMode& audioMode) {
 }
 
 void playAudio(AudioMode& audioMode) {
+  // Start I2S speaker
+  i2s_start(I2S_NUM_1);
+
   File file = SPIFFS.open(RECORD_FILE, "r");
   if (!file) {
     Serial.println("❌ Could not open file for playback");
@@ -114,6 +117,10 @@ void playAudio(AudioMode& audioMode) {
       file.seek(44);
     }
   }
+
+  // Stop I2S
+  i2s_stop(I2S_NUM_1);     // Stops the I2S driver
+  i2s_zero_dma_buffer(I2S_NUM_1);  // Clear any remaining data in DMA buffer
 
   // Cleanup when someone set audioMode != PLAYING
   file.close();
