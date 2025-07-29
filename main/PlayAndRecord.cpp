@@ -120,3 +120,11 @@ void playAudio(AudioMode& audioMode) {
   Serial.println("✅ Playback stopped");
   audioMode = IDLE;
 }
+
+void playAudioTask(void *parameter) {
+  AudioMode* modePtr = static_cast<AudioMode*>(parameter);
+  playAudio(*modePtr);
+
+  // Delete task when done
+  vTaskDelete(NULL);
+}

@@ -73,7 +73,7 @@ const long toneInterval = 1000;  // Play tone every 1 second
 // ========================
 
 // Silent timer
-unsigned long silentWaitTime = 1250;      // 30 sec
+unsigned long silentWaitTime = 5000;      // 5 sec
 
 // Fall detection states
 bool fall = false;
@@ -141,6 +141,9 @@ void detectThermalSensor() {
     if (currentFall && !previousFall) {
       Serial.println("⚠️ FALL DETECTED! Aspect Ratio: " + String(aspectRatio) + ", Speed of change: " + String(ratioChangeSpeed));
       fall = true;
+      
+      lyingDetectionCount = 0;
+      standingDetectionCount = 0;
     } 
     
     // Check if person currently standing
@@ -202,7 +205,15 @@ void playAlarm() {
   // i2s_start(I2S_NUM_1);
 
   audioMode = PLAYING;
-  playAudio(audioMode);
+  xTaskCreatePinnedToCore(
+    playAudioTask,      // Task function
+    "Audio Playback",   // Name
+    8192,               // Stack size
+    &audioMode,         // Parameter to pass
+    1,                  // Priority
+    NULL,               // Task handle (optional)
+    1                   // Core ID (0 or 1)
+  );
 
   alarmActive = true;
 }
@@ -244,7 +255,15 @@ void handleCommands() {
         else if (cmd.equalsIgnoreCase("play")) {
           if (audioMode == IDLE) {
             audioMode = PLAYING;
-            playAudio(audioMode);
+            xTaskCreatePinnedToCore(
+              playAudioTask,      // Task function
+              "Audio Playback",   // Name
+              8192,               // Stack size
+              &audioMode,         // Parameter to pass
+              1,                  // Priority
+              NULL,               // Task handle (optional)
+              1                   // Core ID (0 or 1)
+            );
           } else {
             Serial.println("⚠️ Already recording or playing");
           }
