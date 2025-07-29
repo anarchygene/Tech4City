@@ -308,6 +308,15 @@ void handleCommands() {
   }
 }
 
+void resetFallState() {
+  fall = false;
+  lying = false;
+  triggerAlarm = false;
+  
+  lyingDetectionCount = 0;
+  standingDetectionCount = 0;
+}
+
 // ========================
 // Setup
 // ========================
@@ -397,13 +406,11 @@ void loop() {
   // === Emergency silent timer ===
   if (triggerAlarm) {
     if (resetButtonState == HIGH) {
-      triggerAlarm = false;
+      resetFallState();
       Serial.println("✅ Reset button pressed - emergency cancelled.");
     } else if (currentMillis - fallStartTime > silentWaitTime) {
-      if (!alarmActive) {
-        Serial.println("⏰ Silent timer expired → triggering alarm!");
-        playAlarm();
-      }
+      Serial.println("⏰ Silent timer expired → triggering alarm!");
+      playAlarm();
     } 
 
   } else {
