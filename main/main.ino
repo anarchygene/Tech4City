@@ -3,6 +3,8 @@
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
 #include "driver/i2s.h"
+#include "AudioAnalyzer.h"
+#include "PlayAndRecord.h"
 // #include "ekzl-project-1_inferencing.h"
 // #include <math.h>
 // #include <vector>
@@ -33,14 +35,11 @@ int buttonState = 0;
 // Constants & Settings
 // ========================
 #define SERIAL_BAUD 921600
-#define SAMPLE_RATE 16000
-#define BLOCK_SIZE 512
 #define MAX_RECORD_SECS 10
 #define RECORD_FILE "/recorded.wav"
 
 #define TONE_FREQ 440.0f  // A4 note
-#define TONE_AMPLITUDE 6000
-
+#define TONE_AMPLITUDE 3000
 // ========================
 // Global Objects
 // ========================
@@ -63,7 +62,6 @@ const float FALL_SPEED_THRESHOLD = 4;    // Change per second; tune based on tes
 const unsigned long FRAME_INTERVAL = 100;  // ms between reads (adjust to sensor rate)
 
 // Audio Modes
-enum AudioMode { IDLE, RECORDING, PLAYING };
 AudioMode audioMode = IDLE;
 
 // Global variables
@@ -80,9 +78,7 @@ unsigned long alarmEscalateTime = 15000;   // 5 min
 // unsigned long alarmEscalateTime = 300000;   // 5 min
 
 // Fall detection states
-bool fallDetected = false;
 bool waitingForReset = false;
-bool alarmActive = false;
 bool fall = false;
 bool lying = false;
 unsigned long fallStartTime = 0;
@@ -90,6 +86,12 @@ unsigned long alarmStartTime = 0;
 
 bool guyFell = false;
 bool speakerOn = false;
+
+// AudioAnalyzer
+int16_t audioBuffer[ANALYSIS_BUFFER];
+int bufferIndex = 0;
+bool isRecording = false;
+unsigned long recordStartTime = 0;
 
 void detectThermalSensor() {
   amg.readPixels(pixels);
@@ -165,8 +167,8 @@ void detectThermalSensor() {
 
   if (fall && lying) {
     Serial.println("🎨 Fell and lying down haha.");
-    // fallDetected = true;
     // waitingForReset = true;
+    // guyFell = true;
     // fallStartTime = millis();
   } else {
     Serial.println("Something else");
@@ -220,126 +222,6 @@ void stopAlarm() {
   speakerOn = false;
 }
 
-// Setup SPIFFS
-// ========================
-void setupSPIFFS() {
-  if (!SPIFFS.begin(true)) {
-    Serial.println("❌ Failed to mount SPIFFS");
-  } else {
-    Serial.println("✅ SPIFFS mounted");
-  }
-}
-// ========================
-// Write WAV Header
-// ========================
-void writeWAVHeader(File &file, int32_t dataSize) {
-  const int32_t fileSize = dataSize + 36;
-  const int32_t sampleRate = SAMPLE_RATE;  // ← Make it a variable
-  const int32_t byteRate = SAMPLE_RATE * 2;
-  const uint16_t blockAlign = 2;
-  const uint16_t bitsPerSample = 16;
-  const uint16_t audioFormat = 1;
-  const uint16_t numChannels = 1;
-
-  file.write((uint8_t*)"RIFF", 4);
-  file.write((uint8_t*)&fileSize, 4);
-  file.write((uint8_t*)"WAVE", 4);
-  file.write((uint8_t*)"fmt ", 4);
-  uint32_t subChunk1Size = 16;
-  file.write((uint8_t*)&subChunk1Size, 4);
-  file.write((uint8_t*)&audioFormat, 2);
-  file.write((uint8_t*)&numChannels, 2);
-  file.write((uint8_t*)&sampleRate, 4);     // ✅ Now &sampleRate is valid
-  file.write((uint8_t*)&byteRate, 4);
-  file.write((uint8_t*)&blockAlign, 2);
-  file.write((uint8_t*)&bitsPerSample, 2);
-  file.write((uint8_t*)"data", 4);
-  file.write((uint8_t*)&dataSize, 4);
-}
-// ========================
-// Record Audio to SPIFFS
-// ========================
-void recordAudio() {
-  File file = SPIFFS.open(RECORD_FILE, "w");
-  if (!file) {
-    Serial.println("❌ Could not create file");
-    return;
-  }
-
-  Serial.println("🎙️ Recording...");
-
-  // Write placeholder header
-  uint32_t dummy[9];
-  file.write((uint8_t*)dummy, 36);
-
-  size_t bytes_read;
-  int16_t data[BLOCK_SIZE];
-  int32_t totalBytes = 0;
-
-  unsigned long start = millis();
-  while (millis() - start < MAX_RECORD_SECS * 1000) {
-    if (Serial.available()) {
-      String cmd = Serial.readStringUntil('\n');  // Read first
-      cmd.trim();  // Trim in-place
-      if (cmd.equalsIgnoreCase("stop")) {
-        Serial.println("🛑 Recording stopped by command");
-        break;
-      }
-    }
-
-    esp_err_t err = i2s_read(I2S_NUM_0, data, sizeof(data), &bytes_read, pdMS_TO_TICKS(10));
-    if (err == ESP_OK && bytes_read > 0) {
-      file.write((uint8_t*)data, bytes_read);
-      totalBytes += bytes_read;
-    }
-  }
-
-  // Finalize WAV header
-  file.seek(0);
-  writeWAVHeader(file, totalBytes);
-  file.close();
-
-  Serial.println("✅ Recording saved to SPIFFS");
-  audioMode = IDLE;
-}
-// ========================
-// Play Audio from SPIFFS
-// ========================
-void playAudio() {
-  File file = SPIFFS.open(RECORD_FILE, "r");
-  if (!file) {
-    Serial.println("❌ Could not open file for playback");
-    audioMode = IDLE;
-    return;
-  }
-
-  // Skip WAV header (44 bytes)
-  file.seek(44);
-
-  Serial.println("🔊 Playing...");
-
-  uint8_t buffer[BLOCK_SIZE];
-  while (file.available() && audioMode == PLAYING) {
-    int bytesRead = file.read(buffer, BLOCK_SIZE);
-    if (bytesRead > 0) {
-      size_t bytesWritten;
-      // i2s_write(I2S_NUM_1, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
-
-      // Amplify each sample
-      for (int i = 0; i < bytesRead / 2; i++) {
-        int16_t sample = ((int16_t*)buffer)[i];
-        int32_t amplified = sample * 2;  // Gain = 2x
-        ((int16_t*)buffer)[i] = constrain(amplified, -32768, 32767);
-      }
-
-      i2s_write(I2S_NUM_1, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
-    }
-  }
-
-  file.close();
-  Serial.println("✅ Playback finished");
-  audioMode = IDLE;
-}
 // ========================
 // Handle Serial Commands
 // ========================
@@ -357,7 +239,7 @@ void handleCommands() {
         if (cmd.equalsIgnoreCase("record")) {
           if (audioMode == IDLE) {
             audioMode = RECORDING;
-            recordAudio();
+            recordAudio(audioMode);
           } else {
             Serial.println("⚠️ Already recording or playing");
           }
@@ -365,7 +247,7 @@ void handleCommands() {
         else if (cmd.equalsIgnoreCase("play")) {
           if (audioMode == IDLE) {
             audioMode = PLAYING;
-            playAudio();
+            playAudio(audioMode);
           } else {
             Serial.println("⚠️ Already recording or playing");
           }
@@ -391,10 +273,15 @@ void handleCommands() {
         }
         else if (cmd.equalsIgnoreCase("fell")) {
           Serial.println("The guy fell");
-          fallDetected = true;
           waitingForReset = true;
           guyFell = true;
           fallStartTime = millis();
+        }
+        else if (cmd.equalsIgnoreCase("got up")) {
+          waitingForReset = false;
+          guyFell = false;
+          stopAlarm();
+          Serial.println("✅ Alarm stopped cause the guy got up.");
         }
         else {
           Serial.println("Available commands: record, play, stop, info, format");
@@ -564,45 +451,15 @@ void loop() {
     }
   }
 
-
-  // if (waitingForReset && !alarmActive) {
-  //   if (buttonState == HIGH) {
-  //     waitingForReset = false;
-  //     fallDetected = false;
-  //     stopAlarm();
-  //     Serial.println("✅ Reset button pressed - emergency cancelled.");
-  //   } else if (currentMillis - fallStartTime > silentWaitTime) {
-  //     alarmActive = true;
-  //     alarmStartTime = millis();
-  //     Serial.println("⏰ Silent timer expired → triggering alarm!");
-  //     // sendHuaweiAlert("⚠️ Elderly fell and is unresponsive!");
-  //   }
-  // }
-
-  // // === Alarm escalation ===
-  if (alarmActive) {
-    playAlarmTone();
-    if (buttonState == HIGH) {
-      alarmActive = false;
-      waitingForReset = false;
-      fallDetected = false;
-      stopAlarm();
-      Serial.println("✅ Alarm stopped by reset button.");
-    } else if (currentMillis - alarmStartTime > alarmEscalateTime) {
-      Serial.println("🔁 Alarm escalation: sending repeated alert...");
-      // sendHuaweiAlert("⚠️ Elderly still unresponsive, immediate help required!");
-      alarmStartTime = millis(); // restart escalation timer
-    }
-  }
-
   // === SPEAKER OUTPUT ===
   if (millis() - toneTimer >= toneInterval) {
     toneTimer = millis();
     // generateAndPlayTone();
     // playBeep();
-    playTone();
+    // playTone();
   }
   handleCommands();
-
-  delay(300);
+  // Process audio continuously
+  processAudio(audioBuffer, bufferIndex, isRecording, recordStartTime);
+  // delay(300);
 }
