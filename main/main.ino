@@ -87,7 +87,7 @@ const long toneInterval = 1000;  // Play tone every 1 second
 // ========================
 
 // Silent timer
-long silentWaitTime = 5000;      // 5 sec
+long silentWaitTime = 20000;      // 5 sec
 
 // Fall detection states
 bool fall = false;
@@ -97,6 +97,8 @@ long fallStartTime = 0;
 unsigned long lyingDetectionCount = 0;
 unsigned long standingDetectionCount = 0;
 
+bool fallSoundDetected = false;  // Track if sound was detected
+bool fallSoundPlayed = false;  // Track if sound was played
 bool triggerAlarm = false;
 bool alarmActive = false;
 
@@ -104,12 +106,12 @@ void detectThermalSensor() {
   amg.readPixels(pixels);
 
   // Format: T:p1,p2,...p64
-  Serial.print("T:");
-  for (int i = 0; i < 64; i++) {
-    Serial.print(pixels[i]);
-    if (i < 63) Serial.print(",");
-  }
-  Serial.println();
+  // Serial.print("T:");
+  // for (int i = 0; i < 64; i++) {
+  //   Serial.print(pixels[i]);
+  //   if (i < 63) Serial.print(",");
+  // }
+  // Serial.println();
 
 
   // Reset bounding box
@@ -180,6 +182,7 @@ void detectThermalSensor() {
       lying = false;
       fall = false;
       triggerAlarm = false;
+      fallSoundDetected = false; // Reset sound detection when standing
     }
 
     // Update previous values
@@ -192,6 +195,7 @@ void detectThermalSensor() {
     lying = false;
     fall = false;
     triggerAlarm = false;
+    fallSoundDetected = false;  // Reset sound detection when no human is detected
   }
 
   if (fall && lying) {
@@ -271,7 +275,7 @@ void handleCommands() {
         else if (cmd.equalsIgnoreCase("play")) {
           if (audioMode == IDLE) {
             audioMode = PLAYING;
-            playFallDetected(audioMode);
+            playFallDetected();
           } else {
             Serial.println("⚠️ Already recording or playing");
           }
@@ -330,6 +334,10 @@ void resetFallState() {
   fall = false;
   lying = false;
   triggerAlarm = false;
+  fallSoundDetected = false;  // Reset sound detection
+  fallSoundPlayed = false;  // Reset sound played state
+
+  fallStartTime = 0;
   
   lyingDetectionCount = 0;
   standingDetectionCount = 0;
@@ -453,16 +461,19 @@ void loop() {
   
   // === THERMAL SENSOR ===
   if (currentMillis - thermalTimer >= THERMAL_FRAME_INTERVAL) {
-    // detectThermalSensor();
+    detectThermalSensor();
     thermalTimer = currentMillis;
   }
 
   resetButtonState = digitalRead(RESET_BUTTON_PIN);
 
   // === Emergency silent timer ===
-  if (triggerAlarm) {
+  if (triggerAlarm && fallSoundDetected) {
     switchToSpeakerMode();
-    if (currentMillis - fallStartTime < 4000) playFallDetected(audioMode);
+    if (!fallSoundPlayed ) {
+      playFallDetected();
+      fallSoundPlayed = true;  // Prevent multiple plays
+    }
 
     if (resetButtonState == HIGH) {
       resetFallState();
@@ -477,18 +488,12 @@ void loop() {
   } else {
     stopAlarm();
     switchToMicMode();
+    fallSoundPlayed = false;  // Reset sound played state
   }
-
-
-  // // === SPEAKER OUTPUT ===
-  // if (millis() - toneTimer >= toneInterval) {
-  //   toneTimer = millis();
-  //   // generateAndPlayTone();
-  //   // playBeep();
-  //   // playTone();
-  // }
 
   handleCommands();
   // Process audio continuously
-  if (currentState == LISTENING) analyzeAudio();
+  if (currentState == LISTENING) {
+    if (!fallSoundDetected) fallSoundDetected = analyzeAudio();
+  }
 }

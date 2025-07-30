@@ -14,7 +14,6 @@
 // Enum for audio modes
 enum AudioMode {
   IDLE,
-  RECORDING,
   PLAYING
 };
 
@@ -24,6 +23,6 @@ void setupSPIFFS();
 // void recordAudio(AudioMode& audioMode);
 // void playAudio(AudioMode& audioMode);
 void playAudioTask(void *parameter);
-void playFallDetected(AudioMode& audioMode);
+void playFallDetected();
 
 #endif

@@ -136,14 +136,13 @@ void playAudioTask(void *parameter) {
   vTaskDelete(NULL);
 }
 
-void playFallDetected(AudioMode& audioMode) {
+void playFallDetected() {
   // Start I2S speaker
   i2s_start(I2S_NUM_1);
 
   File file = SPIFFS.open(FALL_DETECTED_FILE, "r");
   if (!file) {
     Serial.println("❌ Could not open file for playback");
-    audioMode = IDLE;
     return;
   }
 
@@ -152,7 +151,7 @@ void playFallDetected(AudioMode& audioMode) {
   Serial.println("🔊 Playing in loop...");
 
   uint8_t buffer[BLOCK_SIZE];
-  while (audioMode == PLAYING && file.available()) {
+  while (file.available()) {
     // If there's data left, read and play it
     int bytesRead = file.read(buffer, BLOCK_SIZE);
       if (bytesRead > 0) {
@@ -171,8 +170,7 @@ void playFallDetected(AudioMode& audioMode) {
   i2s_stop(I2S_NUM_1);     // Stops the I2S driver
   i2s_zero_dma_buffer(I2S_NUM_1);  // Clear any remaining data in DMA buffer
 
-  // Cleanup when someone set audioMode != PLAYING
+  // Cleanup
   file.close();
   Serial.println("✅ Playback stopped");
-  audioMode = IDLE;
 }

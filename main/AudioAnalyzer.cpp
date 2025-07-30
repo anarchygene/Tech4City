@@ -5,10 +5,10 @@
 
 
 // --- Fall Detection Thresholds (requires tuning) ---
-const double ENERGY_THRESHOLD = 200000.0; 
+const double ENERGY_THRESHOLD = 150000.0; 
 const double ZCR_THRESHOLD = 280.0;     
-const double SPECTRAL_FLUX_THRESHOLD = 90000.0; 
-const double LOW_FREQ_ENERGY_RATIO_THRESHOLD = 0.7; // Changed name for clarity
+const double SPECTRAL_FLUX_THRESHOLD = 80000.0; 
+const double LOW_FREQ_ENERGY_RATIO_THRESHOLD = 0.; // Changed name for clarity
 
 // --- Buffers ---
 int16_t i2sBuffer[FFT_SIZE];
@@ -94,10 +94,10 @@ bool analyzeAudio() {
         Serial.printf("Energy: %.2f, ZCR: %.2f, Flux: %.2f, LF Ratio: %.2f\n", energy, zcr, spectralFlux, lowFreqEnergyRatio);
 
         if (isHighEnergy && isSuddenChange && isLowFreqDominant) { // ZCR can be noisy, might remove it initially
-            Serial.println("------------------------------------");
+            Serial.println("------------------------------------------------------------------------------------------------------------");
             Serial.println("🚨 POTENTIAL FALL DETECTED! 🚨");
             Serial.printf("Energy: %.2f, ZCR: %.2f, Flux: %.2f, LF Ratio: %.2f\n", energy, zcr, spectralFlux, lowFreqEnergyRatio);
-            Serial.println("------------------------------------");
+            Serial.println("------------------------------------------------------------------------------------------------------------");
             return true;
         }
     }

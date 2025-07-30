@@ -15,7 +15,7 @@
 const double ENERGY_THRESHOLD = 200000.0; 
 const double ZCR_THRESHOLD = 280.0;     
 const double SPECTRAL_FLUX_THRESHOLD = 0000.0; 
-const double LOW_FREQ_ENERGY_RATIO_THRESHOLD = 0.7; // Changed name for clarity
+const double LOW_FREQ_ENERGY_RATIO_THRESHOLD = 0.6; // Changed name for clarity
 
 // --- Buffers ---
 int16_t i2sBuffer[FFT_SIZE];
