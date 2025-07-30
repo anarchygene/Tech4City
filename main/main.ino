@@ -34,12 +34,26 @@ int resetButtonState = 0;
 // ========================
 // Constants & Settings
 // ========================
-#define SERIAL_BAUD 921600
+#define SERIAL_BAUD 115200
 #define MAX_RECORD_SECS 10
 #define RECORD_FILE "/alarm.wav"
 
 #define TONE_FREQ 440.0f  // A4 note
 #define TONE_AMPLITUDE 3000
+
+enum SystemState {
+  LISTENING,
+  SPEAKER
+};
+SystemState currentState = LISTENING;
+
+// --- I2S Configuration Variables (Keep these global) ---
+i2s_config_t i2s_mic_config;
+i2s_pin_config_t i2s_mic_pins;
+
+i2s_config_t i2s_spk_config;
+i2s_pin_config_t i2s_spk_pins;
+
 // ========================
 // Global Objects
 // ========================
@@ -48,7 +62,7 @@ Adafruit_AMG88xx amg;
 float pixels[AMG88xx_PIXEL_ARRAY_SIZE];  // 8x8 = 64 pixels
 
 // Thresholds (adjust based on testing)
-const float HUMAN_TEMP_MIN = 25.0;    // Min temp for human detection [12]
+const float HUMAN_TEMP_MIN = 30.5;    // Min temp for human detection [12]
 const float ASPECT_RATIO_FALL = 1.1;  // If height/width < this, likely fallen [19]
 
 // Variables for bounding box
@@ -73,24 +87,18 @@ const long toneInterval = 1000;  // Play tone every 1 second
 // ========================
 
 // Silent timer
-unsigned long silentWaitTime = 5000;      // 5 sec
+long silentWaitTime = 5000;      // 5 sec
 
 // Fall detection states
 bool fall = false;
 bool lying = false;
-unsigned long fallStartTime = 0;
+long fallStartTime = 0;
 
 unsigned long lyingDetectionCount = 0;
 unsigned long standingDetectionCount = 0;
 
 bool triggerAlarm = false;
 bool alarmActive = false;
-
-// AudioAnalyzer
-int16_t audioBuffer[ANALYSIS_BUFFER];
-int bufferIndex = 0;
-bool isRecording = false;
-unsigned long recordStartTime = 0;
 
 void detectThermalSensor() {
   amg.readPixels(pixels);
@@ -188,8 +196,8 @@ void detectThermalSensor() {
 
   if (fall && lying) {
     Serial.println("🚩 Guy fell and lying down haha.");
+    if (!triggerAlarm) fallStartTime = millis();
     triggerAlarm = true;
-    fallStartTime = millis();
   }
 
   // delay(THERMAL_FRAME_INTERVAL);
@@ -244,15 +252,7 @@ void handleCommands() {
         cmd.trim();  
         inputBuffer = "";
 
-        if (cmd.equalsIgnoreCase("record")) {
-          if (audioMode == IDLE) {
-            audioMode = RECORDING;
-            recordAudio(audioMode);
-          } else {
-            Serial.println("⚠️ Already recording or playing");
-          }
-        }
-        else if (cmd.equalsIgnoreCase("play")) {
+        if (cmd.equalsIgnoreCase("alarm")) {
           if (audioMode == IDLE) {
             audioMode = PLAYING;
             xTaskCreatePinnedToCore(
@@ -268,6 +268,14 @@ void handleCommands() {
             Serial.println("⚠️ Already recording or playing");
           }
         }
+        else if (cmd.equalsIgnoreCase("play")) {
+          if (audioMode == IDLE) {
+            audioMode = PLAYING;
+            playFallDetected(audioMode);
+          } else {
+            Serial.println("⚠️ Already recording or playing");
+          }
+        }
         else if (cmd.equalsIgnoreCase("stop")) {
           if (audioMode != IDLE) {
             audioMode = IDLE;
@@ -279,6 +287,15 @@ void handleCommands() {
           if (file) {
             Serial.printf("✅ File exists, size: %d bytes\n", file.size());
             file.close();
+          } else {
+            Serial.println("❌ No recording found");
+          }
+
+          
+          File file1 = SPIFFS.open(FALL_DETECTED_FILE, "r");
+          if (file1) {
+            Serial.printf("✅ File exists, size: %d bytes\n", file1.size());
+            file1.close();
           } else {
             Serial.println("❌ No recording found");
           }
@@ -318,6 +335,39 @@ void resetFallState() {
   standingDetectionCount = 0;
 }
 
+void switchToSpeakerMode() {
+  if (currentState == SPEAKER) return;  // Already in speaker mode
+  Serial.println("Switching to Speaker Mode...");
+  
+  // 1. Stop and uninstall the microphone driver
+  i2s_driver_uninstall(I2S_NUM_0);
+
+  // 2. Install and start the speaker driver
+  i2s_driver_install(I2S_NUM_1, &i2s_spk_config, 0, NULL);
+  i2s_set_pin(I2S_NUM_1, &i2s_spk_pins);
+
+  currentState = SPEAKER;
+}
+
+void switchToMicMode() {
+  if (currentState == LISTENING) return;  // Already in mic mode
+  Serial.println("Switching to Microphone Mode...");
+
+  // 1. Stop the alarm and uninstall the speaker driver
+  i2s_driver_uninstall(I2S_NUM_1);
+
+  // 2. Install and start the microphone driver
+  i2s_driver_install(I2S_NUM_0, &i2s_mic_config, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &i2s_mic_pins);
+  
+  // 3. Re-initialize the spectrum buffer for clean analysis
+  for (int i = 0; i < FFT_SIZE / 2; i++) {
+    lastSpectrum[i] = 0;
+  }
+
+  currentState = LISTENING;
+}
+
 // ========================
 // Setup
 // ========================
@@ -337,34 +387,33 @@ void setup() {
     while (1);  // Halt if sensor not found
   }
   Serial.println("AMG8833 sensor found!");
+
   pinMode(RESET_BUTTON_PIN, INPUT);
 
   delay(100);  // Allow time for initialization
 
   // Initialize I2S for Microphone (RX)
-  i2s_config_t i2s_mic_config = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-    .sample_rate = SAMPLE_RATE,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = I2S_COMM_FORMAT_I2S_MSB,
-    .dma_buf_count = 16,
-    .dma_buf_len = BLOCK_SIZE,
-    .use_apll = false
-  };
+  i2s_mic_config = {
+        .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX),
+        .sample_rate = SAMPLE_RATE,
+        .bits_per_sample = i2s_bits_per_sample_t(16),
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
+        .intr_alloc_flags = 0,
+        .dma_buf_count = 8,
+        .dma_buf_len = 64,
+        .use_apll = false
+    };
 
-  i2s_pin_config_t i2s_mic_pins = {
+  i2s_mic_pins = {
     .bck_io_num = I2S_MIC_CLK,
     .ws_io_num = I2S_MIC_WS,
-    .data_out_num = I2S_PIN_NO_CHANGE,
+    .data_out_num = -1,
     .data_in_num = I2S_MIC_SD
   };
 
-  i2s_driver_install(I2S_NUM_0, &i2s_mic_config, 0, NULL);
-  i2s_set_pin(I2S_NUM_0, &i2s_mic_pins);
-
   // Initialize I2S for Speaker (TX)
-  i2s_config_t i2s_spk_config = {
+  i2s_spk_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
     .sample_rate = SAMPLE_RATE,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
@@ -377,16 +426,22 @@ void setup() {
     .use_apll = false
   };
 
-  i2s_pin_config_t i2s_spk_pins = {
+  i2s_spk_pins = {
     .bck_io_num = I2S_SPK_BCLK,
     .ws_io_num = I2S_SPK_LRC,
     .data_out_num = I2S_SPK_DOUT,
     .data_in_num = I2S_PIN_NO_CHANGE
   };
 
-  i2s_driver_install(I2S_NUM_1, &i2s_spk_config, 0, NULL);
-  i2s_set_pin(I2S_NUM_1, &i2s_spk_pins);
+  // --- START IN LISTENING MODE ---
+  Serial.println("System starting in LISTENING mode.");
+  i2s_driver_install(I2S_NUM_0, &i2s_mic_config, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &i2s_mic_pins);
+  for (int i = 0; i < FFT_SIZE / 2; i++) {
+      lastSpectrum[i] = 0;
+  }
 
+  currentState = LISTENING;
   Serial.println("System Initialized");
 }
 
@@ -394,11 +449,11 @@ void setup() {
 // Main Loop
 // ========================
 void loop() {
-  unsigned long currentMillis = millis();
+  long currentMillis = millis();
   
   // === THERMAL SENSOR ===
   if (currentMillis - thermalTimer >= THERMAL_FRAME_INTERVAL) {
-    detectThermalSensor();
+    // detectThermalSensor();
     thermalTimer = currentMillis;
   }
 
@@ -406,10 +461,13 @@ void loop() {
 
   // === Emergency silent timer ===
   if (triggerAlarm) {
+    switchToSpeakerMode();
+    if (currentMillis - fallStartTime < 4000) playFallDetected(audioMode);
+
     if (resetButtonState == HIGH) {
       resetFallState();
       Serial.println("✅ Reset button pressed - emergency cancelled.");
-    } else if (currentMillis - fallStartTime > silentWaitTime) {
+    } else if (currentMillis - fallStartTime >= silentWaitTime) {
       if (!alarmActive) {
         Serial.println("⏰ Silent timer expired → triggering alarm!");
         playAlarm();
@@ -418,13 +476,9 @@ void loop() {
 
   } else {
     stopAlarm();
+    switchToMicMode();
   }
-  Serial.print("currentMillis: ");
-  Serial.println(currentMillis);
-  Serial.print("fallStartTime: ");
-  Serial.println(fallStartTime);
-  Serial.print("silentWaitTime: ");
-  Serial.println(silentWaitTime);
+
 
   // // === SPEAKER OUTPUT ===
   // if (millis() - toneTimer >= toneInterval) {
@@ -436,6 +490,5 @@ void loop() {
 
   handleCommands();
   // Process audio continuously
-  processAudio(audioBuffer, bufferIndex, isRecording, recordStartTime);
-  // delay(300);
+  if (currentState == LISTENING) analyzeAudio();
 }

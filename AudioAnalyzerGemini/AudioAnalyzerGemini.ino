@@ -1,13 +1,20 @@
 #include "Arduino.h"
-#include "AudioAnalyzer.h"
 #include "driver/i2s.h"
 #include <arduinoFFT.h> // Correct include for the library
 
+// --- Audio Configuration ---
+#define I2S_WS 13
+#define I2S_SD 12
+#define I2S_SCK 14
+#define I2S_PORT I2S_NUM_0
+
+#define SAMPLE_RATE 8000
+#define FFT_SIZE 1024 // Must be a power of 2
 
 // --- Fall Detection Thresholds (requires tuning) ---
 const double ENERGY_THRESHOLD = 200000.0; 
 const double ZCR_THRESHOLD = 280.0;     
-const double SPECTRAL_FLUX_THRESHOLD = 90000.0; 
+const double SPECTRAL_FLUX_THRESHOLD = 0000.0; 
 const double LOW_FREQ_ENERGY_RATIO_THRESHOLD = 0.7; // Changed name for clarity
 
 // --- Buffers ---
@@ -17,10 +24,38 @@ double vImag[FFT_SIZE];
 double lastSpectrum[FFT_SIZE / 2];
 
 // Instantiate the FFT object
+// **FIXED THIS LINE**
 ArduinoFFT FFT = ArduinoFFT(vReal, vImag, FFT_SIZE, (double) SAMPLE_RATE);
 
+// Function to install I2S driver
+void i2s_install() {
+    const i2s_config_t i2s_config = {
+        .mode = i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX),
+        .sample_rate = SAMPLE_RATE,
+        .bits_per_sample = i2s_bits_per_sample_t(16),
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
+        .intr_alloc_flags = 0,
+        .dma_buf_count = 8,
+        .dma_buf_len = 64,
+        .use_apll = false
+    };
+    i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+}
+
+// Function to configure I2S pins
+void i2s_setpin() {
+    const i2s_pin_config_t pin_config = {
+        .bck_io_num = I2S_SCK,
+        .ws_io_num = I2S_WS,
+        .data_out_num = -1,
+        .data_in_num = I2S_SD
+    };
+    i2s_set_pin(I2S_PORT, &pin_config);
+}
+
 // Feature Extraction Function
-static void extract_features(double* spectrum, double& energy, double& zcr, double& spectralFlux, double& lowFreqEnergyRatio) {
+void extract_features(double* spectrum, double& energy, double& zcr, double& spectralFlux, double& lowFreqEnergyRatio) {
     energy = 0;
     zcr = 0;
     spectralFlux = 0;
@@ -57,12 +92,22 @@ static void extract_features(double* spectrum, double& energy, double& zcr, doub
     }
 }
 
-bool analyzeAudio() {
+void setup() {
+    Serial.begin(115200);
+    Serial.println("Starting Fall Detection System with ArduinoFFT v2.0.4...");
+    i2s_install();
+    i2s_setpin();
+    for (int i = 0; i < FFT_SIZE / 2; i++) {
+        lastSpectrum[i] = 0;
+    }
+}
 
-  static String inputBuffer = "";
+void loop() {
+
+    static String inputBuffer = "";
 
     size_t bytes_read;
-    i2s_read(I2S_NUM_0, &i2sBuffer, sizeof(i2sBuffer), &bytes_read, portMAX_DELAY);
+    i2s_read(I2S_PORT, &i2sBuffer, sizeof(i2sBuffer), &bytes_read, portMAX_DELAY);
     
     if (bytes_read > 0) {
         // 1. Prepare data for FFT
@@ -98,8 +143,6 @@ bool analyzeAudio() {
             Serial.println("🚨 POTENTIAL FALL DETECTED! 🚨");
             Serial.printf("Energy: %.2f, ZCR: %.2f, Flux: %.2f, LF Ratio: %.2f\n", energy, zcr, spectralFlux, lowFreqEnergyRatio);
             Serial.println("------------------------------------");
-            return true;
         }
     }
-    return false;
 }

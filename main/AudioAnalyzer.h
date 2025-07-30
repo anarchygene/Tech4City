@@ -1,30 +1,19 @@
-#ifndef AudioAnalyzer_h
-#define AudioAnalyzer_h
+#ifndef AUDIO_ANALYZER_H
+#define AUDIO_ANALYZER_H
 
-#include "Arduino.h"
-#include "driver/i2s.h"
-
-// Define constants
-#define SAMPLE_RATE 16000
-#define ANALYSIS_BUFFER 512
+// Define constants here so they are available to all files
+#define FFT_SIZE 1024 
 #define BLOCK_SIZE 512
+#define SAMPLE_RATE 8000
 
-// Define the struct
-struct AudioFeatures {
-  float peakAmplitude;
-  float rms;
-  float loudness;
-};
+// --- Publicly Accessible Variables ---
 
-// Function declarations
-AudioFeatures extractLoudSoundFeatures(int16_t* audioBuffer, int bufferIndex);
-void detectFall(AudioFeatures features, unsigned long duration);
-void processAudio(int16_t* audioBuffer, int& bufferIndex, bool& isRecording, unsigned long& recordStartTime);
+// Use 'extern' to declare that lastSpectrum is DEFINED in a .cpp file 
+// but can be ACCESSED from other files (like your .ino).
+extern double lastSpectrum[FFT_SIZE / 2];
 
-// Constants
-extern const int LOUDNESS_THRESHOLD;
-extern const int PEAK_THRESHOLD;
-extern const int MIN_SOUND_DURATION;
-extern const int MAX_SOUND_DURATION;
 
-#endif
+// --- Public Functions ---
+bool analyzeAudio();
+
+#endif // AUDIO_ANALYZER_H

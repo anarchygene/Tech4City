@@ -7,8 +7,9 @@
 #include "driver/i2s.h"
 
 // Constants
-#define MAX_RECORD_SECS 10
+#define MAX_RECORD_SECS 5
 #define RECORD_FILE "/recorded.wav"
+#define FALL_DETECTED_FILE "/fall_detected.wav"
 
 // Enum for audio modes
 enum AudioMode {
@@ -19,15 +20,10 @@ enum AudioMode {
 
 // Function declarations
 void setupSPIFFS();
-void writeWAVHeader(File &file, int32_t dataSize);
-void recordAudio(AudioMode& audioMode);
-void playAudio(AudioMode& audioMode);
+// void writeWAVHeader(File &file, int32_t dataSize);
+// void recordAudio(AudioMode& audioMode);
+// void playAudio(AudioMode& audioMode);
 void playAudioTask(void *parameter);
-void stopAlarm();
-
-// External variables
-extern bool waitingForReset;
-extern bool guyFell;
-extern unsigned long fallStartTime;
+void playFallDetected(AudioMode& audioMode);
 
 #endif
